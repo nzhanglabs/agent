@@ -9,6 +9,26 @@ SYSTEM_PROMPT = {
     "content": "You are a coding agent, use the tools to complete the task",
 }
 
+SKIP_DIRS = {".git", ".venv", "__pycache__"}
+
+
+def list_files(path="."):
+    try:
+        base_path = Path(path)
+        if not base_path.exists():
+            return {"error": f"Path not found: {path}"}
+        if base_path.is_file():
+            return {"files": [str(base_path)]}
+
+        files = sorted(
+            str(file_path)
+            for file_path in base_path.rglob("*")
+            if not any(part in SKIP_DIRS for part in file_path.parts)
+        )
+        return {"files": files}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 def read_file(path):
     try:
@@ -16,6 +36,81 @@ def read_file(path):
         return {"text": content}
     except FileNotFoundError:
         return {"error": f"File not found: {path}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def search(query, path="."):
+    try:
+        base_path = Path(path)
+        if not base_path.exists():
+            return {"error": f"Path not found: {path}"}
+
+        search_paths = (
+            [base_path]
+            if base_path.is_file()
+            else sorted(
+                file_path
+                for file_path in base_path.rglob("*")
+                if not any(part in SKIP_DIRS for part in file_path.parts)
+            )
+        )
+        matches = []
+        for file_path in search_paths:
+            if not file_path.is_file():
+                continue
+            try:
+                for line_number, line in enumerate(file_path.read_text().splitlines(), start=1):
+                    if query in line:
+                        matches.append(
+                            {
+                                "path": str(file_path),
+                                "line_number": line_number,
+                                "line": line,
+                            }
+                        )
+            except Exception:
+                continue
+
+        return {"matches": matches}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def write_file(path, content):
+    try:
+        file_path = Path(path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content)
+        return {"status": "ok", "path": str(file_path)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def edit_file(path, old_text, new_text):
+    try:
+        file_path = Path(path)
+        content = file_path.read_text()
+        if old_text not in content:
+            return {"error": f"Text not found in file: {path}"}
+
+        updated_content = content.replace(old_text, new_text, 1)
+        file_path.write_text(updated_content)
+        return {"status": "ok", "path": str(file_path)}
+    except FileNotFoundError:
+        return {"error": f"File not found: {path}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def run_command(cmd):
+    try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        return {
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode,
+        }
     except Exception as e:
         return {"error": str(e)}
 
@@ -38,6 +133,15 @@ available_tools = [
     },
     {
         "type": "function",
+        "name": "list_files",
+        "description": "List files under a directory recursively",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+        },
+    },
+    {
+        "type": "function",
         "name": "read_file",
         "description": "Read the contents of a file",
         "parameters": {
@@ -46,9 +150,67 @@ available_tools = [
             "required": ["path"],
         },
     },
+    {
+        "type": "function",
+        "name": "search",
+        "description": "Search for text in a file or directory",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "path": {"type": "string"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "edit_file",
+        "description": "Replace the first occurrence of text in a file",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "old_text": {"type": "string"},
+                "new_text": {"type": "string"},
+            },
+            "required": ["path", "old_text", "new_text"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "write_file",
+        "description": "Create or overwrite a file with new content",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "run_command",
+        "description": "Run a shell command and capture stdout, stderr, and exit code",
+        "parameters": {
+            "type": "object",
+            "properties": {"cmd": {"type": "string"}},
+            "required": ["cmd"],
+        },
+    },
 ]
 
-tool_cmds = {"echo": lambda text: ["/usr/bin/echo", text], "read_file": read_file}
+tool_cmds = {
+    "echo": echo,
+    "list_files": list_files,
+    "read_file": read_file,
+    "search": search,
+    "edit_file": edit_file,
+    "write_file": write_file,
+    "run_command": run_command,
+}
 
 
 def agent_loop(client, user_msg):
